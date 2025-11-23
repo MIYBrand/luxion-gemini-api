@@ -1,63 +1,67 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
-
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "POST only" });
   }
 
   try {
-    const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-pro" });
+    const { imageUrls } = req.body;
 
-    const { imageUrl, imageUrls } = req.body;
-
-    // 1) 단일 이미지
-    if (imageUrl) {
-      const result = await model.generateContent([
-        {
-          inlineData: await fetchImageAsBase64(imageUrl)
-        },
-        "이미지 분석해줘. 브랜드, 제품종류, 상태, 흠결, 코멘트를 JSON으로만 반환해."
-      ]);
-
-      return res.status(200).json(result.response.text());
+    // 1) 파라미터 검증
+    if (!imageUrls || !Array.isArray(imageUrls) || imageUrls.length === 0) {
+      return res.status(400).json({ error: "imageUrls array missing" });
     }
 
-    // 2) 다중 이미지
-    if (imageUrls && Array.isArray(imageUrls)) {
-      const parts = [];
-
-      for (const url of imageUrls) {
-        const base64 = await fetchImageAsBase64(url);
-        parts.push({ inlineData: base64 });
+    // 2) 이미지들을 base64로 변환
+    const converted = [];
+    for (const url of imageUrls) {
+      const img = await fetch(url);
+      if (!img.ok) {
+        return res.status(400).json({
+          error: "Image fetch failed",
+          url,
+          status: img.status,
+        });
       }
+      const buffer = Buffer.from(await img.arrayBuffer());
+      const base64 = buffer.toString("base64");
 
-      // 프롬프트 추가
-      parts.push(
-        "여러 장의 이미지를 종합 분석하여 하나의 결과를 JSON으로만 반환해. " +
-          "브랜드, 제품종류, 상태, 흠결, 코멘트 포함."
-      );
-
-      const result = await model.generateContent(parts);
-
-      return res.status(200).json(result.response.text());
+      converted.push({
+        inlineData: {
+          mimeType: "image/jpeg",
+          data: base64,
+        },
+      });
     }
 
-    return res.status(400).json({ error: "imageUrl or imageUrls missing" });
-  } catch (error) {
-    console.error("Gemini API Error:", error);
-    return res.status(500).json({ error: "Server error", detail: error.message });
+    // 3) Gemini Vision 2.5 API 호출 (multi-image 방식)
+    const geminiRes = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${process.env.GEMINI_API}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                ...converted,
+
+                {
+                  text:
+                    "이 이미지들을 종합 분석해주세요. 브랜드, 종류, 컨디션, 불량, 전반 평가를 JSON 형식으로만 출력해주세요.",
+                },
+              ],
+            },
+          ],
+        }),
+      }
+    );
+
+    const data = await geminiRes.json();
+    return res.status(200).json(data);
+  } catch (e) {
+    return res.status(500).json({
+      error: String(e),
+      message: "Server Error",
+    });
   }
-}
-
-async function fetchImageAsBase64(url) {
-  const response = await fetch(url);
-  const arrayBuffer = await response.arrayBuffer();
-  const base64 = Buffer.from(arrayBuffer).toString("base64");
-
-  // Vercel 용 inlineData 구조
-  return {
-    data: base64,
-    mimeType: "image/jpeg",
-  };
 }
