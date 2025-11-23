@@ -45,7 +45,7 @@ export default async function handler(req) {
 
     // Gemini Vision 요청
     const geminiRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${process.env.GEMINI_API}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -83,3 +83,4 @@ export default async function handler(req) {
     });
   }
 }
+
