@@ -1,24 +1,49 @@
-export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'POST only' });
-  }
+export const config = {
+  runtime: "edge",
+};
 
+export default async function handler(req) {
   try {
-    const { imageUrl } = req.body;
+    if (req.method !== "POST") {
+      return new Response(JSON.stringify({ error: "POST only" }), {
+        status: 405,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    // 🔥 Bubble JSON 파싱 오류 방지용
+    let body;
+    try {
+      body = await req.json();
+    } catch (err) {
+      return new Response(
+        JSON.stringify({ error: "Invalid JSON", detail: err.message }),
+        { status: 500 }
+      );
+    }
+
+    const { imageUrl } = body;
 
     if (!imageUrl) {
-      return res.status(400).json({ error: 'imageUrl missing' });
+      return new Response(
+        JSON.stringify({ error: "imageUrl missing" }),
+        { status: 400 }
+      );
     }
 
-    // 1. 이미지 다운로드 → Buffer 변환
+    // 이미지 다운로드 → base64 변환
     const img = await fetch(imageUrl);
     if (!img.ok) {
-      return res.status(400).json({ error: 'Image fetch failed', status: img.status });
+      return new Response(
+        JSON.stringify({ error: "Image fetch failed", status: img.status }),
+        { status: 400 }
+      );
     }
-    const arrayBuffer = await img.arrayBuffer();
-    const base64 = Buffer.from(arrayBuffer).toString('base64');
 
-    // 2. Gemini Vision API 호출
+    const arrayBuffer = await img.arrayBuffer();
+    const base64 = Buffer.from(arrayBuffer).toString("base64");
+
+    // Gemini Vision 요청
     const geminiRes = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API}`,
       {
@@ -35,15 +60,7 @@ export default async function handler(req, res) {
                   }
                 },
                 {
-                  text:
-                    "이 이미지는 중고 명품 제품입니다. " +
-                    "브랜드, 제품 종류, 컨디션을 분석해서 아래 JSON 형식으로만 출력하세요:\n" +
-                    `{
-                      "brand": "",
-                      "category": "",
-                      "condition_summary": "",
-                      "defects": []
-                    }`
+                  text: "이 이미지는 중고 명품 제품입니다. 브랜드, 제품 종류, 컨디션을 분석해 아래 JSON 형식으로만 출력해줘."
                 }
               ]
             }
@@ -52,34 +69,17 @@ export default async function handler(req, res) {
       }
     );
 
-    if (!geminiRes.ok) {
-      const errText = await geminiRes.text();
-      return res.status(500).json({ error: "Gemini failed", detail: errText });
-    }
+    const geminiText = await geminiRes.json();
 
-    const gjson = await geminiRes.json();
+    return new Response(JSON.stringify(geminiText), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
 
-    // 3. Gemini 응답에서 텍스트 추출
-    let rawText = gjson?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-
-    rawText = rawText
-      .replace(/```json/gi, "")
-      .replace(/```/g, "")
-      .trim();
-
-    let finalJson = null;
-    try {
-      finalJson = JSON.parse(rawText);
-    } catch (e) {
-      return res.status(200).json({
-        rawText,
-        parsed: null,
-        warning: "JSON parse 실패. rawText 확인 필요"
-      });
-    }
-
-    return res.status(200).json(finalJson);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return new Response(JSON.stringify({ error: err.message }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" }
+    });
   }
 }
