@@ -1,41 +1,49 @@
 export default async function handler(req, res) {
-  // Only allow POST
   if (req.method !== "POST") {
     return res.status(405).json({ error: "POST only" });
   }
 
-  // 🟩 1) Bubble → Vercel 로 들어온 실제 값 완전 로그
-  console.log("🔥 Received body from Bubble:", req.body);
-
   try {
-    // imageUrl은 단일 문자열 또는 배열일 수 있음
-    let { imageUrl } = req.body;
+    const { imageUrl } = req.body;
 
-    // 값이 완전히 없는 경우
-    if (!imageUrl) {
-      return res.status(400).json({ error: "imageUrl missing" });
+    if (!imageUrl || typeof imageUrl !== "string") {
+      return res.status(400).json({ error: "imageUrl missing or invalid" });
     }
 
-    // 하나만 올렸어도 Bubble은 list 형태일 수 있음
-    if (Array.isArray(imageUrl)) {
-      imageUrl = imageUrl[0]; // 첫 번째 이미지만 사용
+    // ------------------------------------------
+    // (1) 이미지 URL 자동 정정 (핵심 해결 코드)
+    // ------------------------------------------
+    let finalUrl = imageUrl.trim();
+
+    // //i.imgur.com/xxx → https://i.imgur.com/xxx 변환
+    if (finalUrl.startsWith("//")) {
+      finalUrl = "https:" + finalUrl;
     }
 
-    console.log("🔥 Final image URL used:", imageUrl);
+    // https: 빠진 경우 자동 보정
+    if (!finalUrl.startsWith("http://") && !finalUrl.startsWith("https://")) {
+      finalUrl = "https://" + finalUrl;
+    }
 
-    // 🟩 2) 이미지 다운로드 → Buffer 변환
-    const img = await fetch(imageUrl);
+    // ------------------------------------------
+    // (2) 이미지 다운로드 → Buffer 변환
+    // ------------------------------------------
+    const img = await fetch(finalUrl);
+
     if (!img.ok) {
       return res.status(400).json({
         error: "Image fetch failed",
         status: img.status,
+        url: finalUrl
       });
     }
 
     const arrayBuffer = await img.arrayBuffer();
     const base64 = Buffer.from(arrayBuffer).toString("base64");
 
-    // 🟩 3) Gemini Vision (2.5 Pro) 요청
+    // ------------------------------------------
+    // (3) Gemini Vision API 호출
+    // ------------------------------------------
     const geminiRes = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${process.env.GEMINI_API}`,
       {
@@ -48,29 +56,34 @@ export default async function handler(req, res) {
                 {
                   inlineData: {
                     mimeType: "image/jpeg",
-                    data: base64,
-                  },
+                    data: base64
+                  }
                 },
                 {
                   text:
-                    "이 이미지를 종합 분석해주세요.\n" +
-                    "brand, model_name, product_type, condition, defects 등을 구분해서 " +
-                    "JSON 형식으로만 출력하세요.\n",
-                },
-              ],
-            },
-          ],
-        }),
+                    `이 이미지는 중고 명품 사진입니다.\n` +
+                    `브랜드, 제품 종류, 컨디션을 분석해서 아래 JSON 형식으로만 출력하세요:\n\n` +
+                    `{
+                      "brand": "",
+                      "product_type": "",
+                      "condition": "",
+                      "defects": "",
+                      "comment": ""
+                    }`
+                }
+              ]
+            }
+          ]
+        })
       }
     );
 
     const result = await geminiRes.json();
-
-    console.log("🔥 Gemini API Response:", result);
-
     return res.status(200).json(result);
-  } catch (e) {
-    console.error("🔥 Server Error:", e);
-    return res.status(500).json({ error: "Server error", detail: e.message });
+  } catch (err) {
+    return res.status(500).json({
+      error: "Server error",
+      detail: err.message
+    });
   }
 }
